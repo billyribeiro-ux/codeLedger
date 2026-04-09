@@ -42,6 +42,10 @@ Desktop learning tracker: languages, notes, goals, study sessions, Pomodoro time
 | `npm test` | Vitest |
 | `npm run lint` | ESLint |
 
+## Keyboard shortcuts
+
+Global shortcuts (when focus is **not** in an input): **`/`** command palette, **`⌘K`** / **`Ctrl+K`** palette, **`Alt+1`–`Alt+8`** main views, **`[`** / **`]`** previous/next view, **`⌘,`** / **`Ctrl+,`** settings, **`⌘B`** / **`Ctrl+B`** sidebar, **`⌘⌥P`** / **`Ctrl+Alt+P`** Pomodoro, **`Space`** start/pause timer while the Pomodoro dialog is open, **`Esc`** close palette or Pomodoro. Full list in-app under **Settings → Keyboard shortcuts**. The palette uses **fuzzy** matching on commands, languages, notes, and goals.
+
 ## CI
 
 GitHub Actions (`.github/workflows/tauri-build.yml`) runs `npm run tauri build` on **macOS**, **Ubuntu**, and **Windows** for pushes and PRs to `main`/`master`, and uploads `src-tauri/target/release/bundle/**` as workflow artifacts. Add code signing / notarization secrets when you ship publicly.

@@ -2,9 +2,18 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import type { Goal, Note, Profile, ProgressMap, Session, ToastState } from "./types";
 import { backupSchema } from "./schema";
-import { initStorage, load, save } from "./storage";
-import { LANGS, LANG_MAP, MASTERY, defaultProfile, defaultProgress } from "./constants";
-import { uid, fmtDate, fmtDateShort, fmtTime, daysSince, pluralize } from "./utils";
+import { flushPendingSaves, initStorage, load, save } from "./storage";
+import { LANGS, LANG_MAP, MASTERY, defaultProfile, defaultProgress, mergeProgressWithDefaults } from "./constants";
+import {
+  uid,
+  fmtDate,
+  fmtDateShort,
+  fmtTime,
+  daysSince,
+  pluralize,
+  isEditableElement,
+  matchScore,
+} from "./utils";
 
 /* ═══════════════════════════════════════════════════════════════
    CodeLedger v3 — Distinguished Principal Engineer Edition
@@ -20,7 +29,7 @@ import { uid, fmtDate, fmtDateShort, fmtTime, daysSince, pluralize } from "./uti
    - Analytics with streak calendar, language breakdown, weekly trends
    - JSON export/import for full data portability
    - Micro-animations and polished transitions
-   - Responsive down to 480px
+   - Responsive layout from narrow phones through 4K / ultra-wide
    - Persistent storage across sessions
    ═══════════════════════════════════════════════════════════════ */
 
@@ -46,6 +55,20 @@ export default function CodeLedger() {
   const pomoRef = useRef(null);
   const toastRef = useRef(null);
 
+  const navItems = useMemo(
+    () => [
+      { id: "dashboard", icon: "▣", label: "Dashboard", key: "1" },
+      { id: "languages", icon: "◆", label: "Languages", key: "2" },
+      { id: "notes", icon: "✎", label: "Notes", key: "3" },
+      { id: "goals", icon: "◎", label: "Goals", key: "4" },
+      { id: "sessions", icon: "▶", label: "Sessions", key: "5" },
+      { id: "review", icon: "↻", label: "Review", key: "6" },
+      { id: "analytics", icon: "◫", label: "Analytics", key: "7" },
+      { id: "settings", icon: "⚙", label: "Settings", key: "8" },
+    ],
+    []
+  );
+
   // Load
   useEffect(() => {
     (async () => {
@@ -54,7 +77,9 @@ export default function CodeLedger() {
         load("cl3-profile", defaultProfile()), load("cl3-progress", defaultProgress()),
         load<Note[]>("cl3-notes", []), load<Goal[]>("cl3-goals", []), load<Session[]>("cl3-sessions", []),
       ]);
-      setProfile(p); setProgress(pr); setNotes(n); setGoals(g); setSessions(s); setLoaded(true);
+      setProfile(p);
+      setProgress(mergeProgressWithDefaults(pr));
+      setNotes(n); setGoals(g); setSessions(s); setLoaded(true);
     })();
   }, []);
 
@@ -72,15 +97,113 @@ export default function CodeLedger() {
     toastRef.current = setTimeout(() => setToast(null), 2800);
   }, []);
 
-  // Keyboard shortcuts
+  const viewOrder = useMemo(() => navItems.map((n) => n.id), [navItems]);
+
+  // Flush SQLite / localStorage before unload
+  useEffect(() => {
+    const flush = () => {
+      void flushPendingSaves();
+    };
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
+
+  // Global keyboard shortcuts (skipped while typing in inputs)
   useEffect(() => {
     const handler = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setCmdOpen((p) => !p); }
-      if (e.key === "Escape") { setCmdOpen(false); }
+      const mod = e.metaKey || e.ctrlKey;
+      const inField = isEditableElement(e.target);
+
+      if (mod && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdOpen((p) => !p);
+        return;
+      }
+
+      if (!inField && e.key === "/" && !mod && !e.altKey) {
+        e.preventDefault();
+        setCmdOpen(true);
+        return;
+      }
+
+      if (mod && e.key === ",") {
+        e.preventDefault();
+        setView("settings");
+        setSelLang(null);
+        setCmdOpen(false);
+        return;
+      }
+
+      if (mod && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setSideOpen((s) => !s);
+        return;
+      }
+
+      if (!inField && (e.metaKey || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setCmdOpen(false);
+        setPomoActive(true);
+        return;
+      }
+
+      if (!inField && e.altKey && !mod && /^[1-8]$/.test(e.key)) {
+        e.preventDefault();
+        const idx = parseInt(e.key, 10) - 1;
+        const item = navItems[idx];
+        if (item) {
+          setView(item.id);
+          setSelLang(null);
+          setCmdOpen(false);
+        }
+        return;
+      }
+
+      if (!inField && !mod && (e.key === "[" || e.key === "]")) {
+        e.preventDefault();
+        const i = viewOrder.indexOf(view);
+        if (i < 0) return;
+        const next =
+          e.key === "["
+            ? viewOrder[(i - 1 + viewOrder.length) % viewOrder.length]
+            : viewOrder[(i + 1) % viewOrder.length];
+        setView(next);
+        setSelLang(null);
+        return;
+      }
+
+      if (pomoActive && !inField && (e.key === " " || e.code === "Space")) {
+        e.preventDefault();
+        if (pomoRunning) setPomoRunning(false);
+        else {
+          if (pomoSeconds === 0) setPomoSeconds(pomoDuration * 60);
+          setPomoRunning(true);
+        }
+        return;
+      }
+
+      if (e.key === "Escape") {
+        if (cmdOpen) {
+          setCmdOpen(false);
+          return;
+        }
+        if (pomoActive) {
+          if (pomoRunning) setPomoRunning(false);
+          else {
+            setPomoActive(false);
+            setPomoSeconds(pomoDuration * 60);
+            setPomoRunning(false);
+          }
+        }
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [viewOrder, view, cmdOpen, pomoActive, pomoRunning, pomoDuration, navItems]);
 
   // Pomodoro timer
   useEffect(() => {
@@ -144,7 +267,7 @@ export default function CodeLedger() {
       }
       const d = parsed.data;
       if (d.profile) setProfile(d.profile);
-      if (d.progress) setProgress(d.progress as ProgressMap);
+      if (d.progress) setProgress(mergeProgressWithDefaults(d.progress as ProgressMap));
       if (d.notes) setNotes(d.notes as Note[]);
       if (d.goals) setGoals(d.goals as Goal[]);
       if (d.sessions) setSessions(d.sessions as Session[]);
@@ -161,17 +284,6 @@ export default function CodeLedger() {
       <p style={{ color: "#666", marginTop: 20, fontFamily: "var(--mono)", fontSize: 12, letterSpacing: 2, textTransform: "uppercase" }}>CodeLedger</p>
     </div>
   );
-
-  const navItems = [
-    { id: "dashboard", icon: "▣", label: "Dashboard", key: "1" },
-    { id: "languages", icon: "◆", label: "Languages", key: "2" },
-    { id: "notes", icon: "✎", label: "Notes", key: "3" },
-    { id: "goals", icon: "◎", label: "Goals", key: "4" },
-    { id: "sessions", icon: "▶", label: "Sessions", key: "5" },
-    { id: "review", icon: "↻", label: "Review", key: "6" },
-    { id: "analytics", icon: "◫", label: "Analytics", key: "7" },
-    { id: "settings", icon: "⚙", label: "Settings", key: "8" },
-  ];
 
   return (
     <div style={S.app}>
@@ -190,12 +302,20 @@ export default function CodeLedger() {
         onNavigate={(v, lang) => { setView(v); if (lang) setSelLang(lang); setCmdOpen(false); }}
         onClose={() => setCmdOpen(false)}
         onStartPomo={() => { setCmdOpen(false); setPomoActive(true); }}
+        onExport={() => { setCmdOpen(false); exportData(); }}
       />}
 
       {/* ── Pomodoro Overlay ── */}
       {pomoActive && (
-        <div style={S.overlay} onClick={() => { if (!pomoRunning) setPomoActive(false); }}>
-          <div style={S.pomoModal} onClick={(e) => e.stopPropagation()}>
+        <div className="cl-overlay cl-overlay-pomo" style={S.overlay} onClick={() => { if (!pomoRunning) setPomoActive(false); }}>
+          <div
+            style={S.pomoModal}
+            onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Pomodoro timer"
+          >
             <h2 style={{ fontFamily: "var(--serif)", fontSize: 28, color: "#fff", marginBottom: 8 }}>Pomodoro Timer</h2>
             <div style={S.pomoTime}>
               {String(Math.floor(pomoSeconds / 60)).padStart(2, "0")}:{String(pomoSeconds % 60).padStart(2, "0")}
@@ -251,8 +371,13 @@ export default function CodeLedger() {
         </div>
         <nav style={S.nav}>
           {navItems.map((item) => (
-            <button key={item.id} style={{ ...S.navItem, ...(view === item.id ? S.navActive : {}) }}
-              onClick={() => { setView(item.id); setSelLang(null); }}>
+            <button
+              key={item.id}
+              type="button"
+              title={`${item.label} (Alt+${item.key})`}
+              style={{ ...S.navItem, ...(view === item.id ? S.navActive : {}) }}
+              onClick={() => { setView(item.id); setSelLang(null); }}
+            >
               <span style={S.navIcon}>{item.icon}</span>
               {sideOpen && <span style={{ flex: 1 }}>{item.label}</span>}
               {sideOpen && <span style={S.navKey}>{item.key}</span>}
@@ -267,7 +392,9 @@ export default function CodeLedger() {
             <div style={S.streak}>
               <span>🔥</span> {profile.streakDays} day streak
             </div>
-            <div style={{ fontSize: 10, color: "#444", marginTop: 4, fontFamily: "var(--mono)" }}>⌘K to search</div>
+            <div style={{ fontSize: 9, color: "#444", marginTop: 6, fontFamily: "var(--mono)", lineHeight: 1.45 }}>
+              ⌘K palette · / search · Alt+1–8 · [ ] views · ⌘, settings · ⌘⌥P timer · Space pause
+            </div>
           </div>
         )}
       </aside>
@@ -302,26 +429,68 @@ export default function CodeLedger() {
 // ══════════════════════════════════════════
 // COMMAND PALETTE
 // ══════════════════════════════════════════
-function CommandPalette({ navItems, notes, goals, langs, onNavigate, onClose, onStartPomo }) {
+function CommandPalette({ navItems, notes, goals, langs, onNavigate, onClose, onStartPomo, onExport }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
 
+  const typeOrder = { nav: 0, action: 1, lang: 2, note: 3, goal: 4 };
+
   const results = useMemo(() => {
-    const q = query.toLowerCase();
-    const items = [];
-    // Nav
-    navItems.forEach((n) => { if (!q || n.label.toLowerCase().includes(q)) items.push({ type: "nav", label: n.label, icon: n.icon, action: () => onNavigate(n.id) }); });
-    // Languages
-    langs.forEach((l) => { if (!q || l.name.toLowerCase().includes(q)) items.push({ type: "lang", label: l.name, icon: l.icon, color: l.color, action: () => onNavigate("languages", l.id) }); });
-    // Pomodoro
-    if (!q || "pomodoro".includes(q) || "timer".includes(q)) items.push({ type: "action", label: "Start Pomodoro Timer", icon: "⏱", action: onStartPomo });
-    // Notes
-    notes.slice(0, 50).forEach((n) => { if (q && (n.title.toLowerCase().includes(q) || n.content?.toLowerCase().includes(q))) items.push({ type: "note", label: n.title, icon: "✎", action: () => onNavigate("notes") }); });
-    // Goals
-    goals.slice(0, 30).forEach((g) => { if (q && g.title.toLowerCase().includes(q)) items.push({ type: "goal", label: g.title, icon: "◎", action: () => onNavigate("goals") }); });
-    return items.slice(0, 12);
-  }, [query, navItems, notes, goals, langs, onNavigate, onStartPomo]);
+    const q = query.trim();
+    const bag = [];
+
+    const push = (type, label, icon, color, action, extraHay = "") => {
+      const hay = `${label} ${extraHay}`.trim();
+      const score = matchScore(hay, q);
+      if (q && score === 0) return;
+      bag.push({ type, label, icon, color: color || undefined, action, _score: score });
+    };
+
+    navItems.forEach((n) =>
+      push("nav", n.label, n.icon, null, () => onNavigate(n.id), `${n.id} screen`)
+    );
+
+    push("action", "Start Pomodoro timer", "⏱", null, onStartPomo, "pomodoro focus timer");
+    push("action", "Export JSON backup", "⬇", null, onExport, "download backup export");
+
+    langs.forEach((l) =>
+      push("lang", l.name, l.icon, l.color, () => onNavigate("languages", l.id), l.id)
+    );
+
+    notes.slice(0, 80).forEach((n) => {
+      const snippet = (n.content || "").slice(0, 120);
+      const score = Math.max(matchScore(n.title, q), snippet ? matchScore(snippet, q) : 0);
+      if (q && score === 0) return;
+      bag.push({
+        type: "note",
+        label: n.title,
+        icon: "✎",
+        action: () => onNavigate("notes"),
+        _score: q ? score : 100,
+      });
+    });
+
+    goals.slice(0, 40).forEach((g) => {
+      const hay = `${g.title} ${g.description || ""}`.trim();
+      const score = matchScore(hay, q);
+      if (q && score === 0) return;
+      bag.push({
+        type: "goal",
+        label: g.title,
+        icon: "◎",
+        action: () => onNavigate("goals"),
+        _score: q ? score : 100,
+      });
+    });
+
+    bag.sort((a, b) => {
+      if (b._score !== a._score) return b._score - a._score;
+      return (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9);
+    });
+
+    return bag.slice(0, 14).map(({ _score, ...rest }) => rest);
+  }, [query, navItems, notes, goals, langs, onNavigate, onStartPomo, onExport]);
 
   const [sel, setSel] = useState(0);
   useEffect(() => setSel(0), [query]);
@@ -334,14 +503,14 @@ function CommandPalette({ navItems, notes, goals, langs, onNavigate, onClose, on
   };
 
   return (
-    <div style={S.overlay} onClick={onClose}>
-      <div style={S.cmdModal} onClick={(e) => e.stopPropagation()}>
+    <div className="cl-overlay cl-overlay-cmd" style={S.overlay} onClick={onClose}>
+      <div className="cl-cmd-modal" style={S.cmdModal} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Command palette">
         <div style={S.cmdInputWrap}>
           <span style={{ color: "#555", fontSize: 16 }}>⌘</span>
-          <input ref={inputRef} style={S.cmdInput} placeholder="Search commands, languages, notes..."
+          <input ref={inputRef} style={S.cmdInput} placeholder="Search or type / — fuzzy matches titles & commands"
             value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={handleKey} />
         </div>
-        <div style={S.cmdResults}>
+        <div className="cl-cmd-results" style={S.cmdResults}>
           {results.map((r, i) => (
             <button key={i} style={{ ...S.cmdItem, ...(i === sel ? S.cmdItemActive : {}) }}
               onClick={r.action} onMouseEnter={() => setSel(i)}>
@@ -416,7 +585,7 @@ function Dashboard({ profile, progress, notes, goals, sessions, onNav, onStartPo
           <h2 style={S.secT}>Mastery Map</h2>
           <button style={S.linkBtn} onClick={() => onNav("languages")}>View all →</button>
         </div>
-        <div style={S.mastGrid}>
+        <div className="cl-mast-grid" style={S.mastGrid}>
           {LANGS.map((lang) => {
             const d = progress[lang.id];
             const pct = (d.mastery / 7) * 100;
@@ -508,7 +677,7 @@ function LangsGrid({ progress, onSelect }) {
         <h1 style={S.vt}>Languages & Frameworks</h1>
         <p style={S.vs}>Select a language to track topics, adjust mastery, and log notes.</p>
       </header>
-      <div style={S.langGrid}>
+      <div className="cl-lang-grid" style={S.langGrid}>
         {LANGS.map((lang) => {
           const d = progress[lang.id];
           return (
@@ -1119,7 +1288,17 @@ function SettingsView({ profile, onUpdate, onExport, onImport, onReset }) {
       <section style={{ ...S.sec, borderColor: "#1a1a1a", background: "#0d0d0d" }}>
         <h2 style={S.secT}>Keyboard Shortcuts</h2>
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 16px", fontSize: 13 }}>
-          {[["⌘ K", "Command palette"], ["Esc", "Close dialogs"], ["1-8", "Navigate views (via palette)"]].map(([k, v], idx) => (
+          {[
+            ["⌘K / Ctrl+K", "Command palette"],
+            ["/", "Open palette (when not typing in a field)"],
+            ["Esc", "Close palette / pause or close Pomodoro"],
+            ["Alt+1 … Alt+8", "Jump to sidebar views"],
+            ["[ and ]", "Previous / next view"],
+            ["⌘, / Ctrl+,", "Settings"],
+            ["⌘B / Ctrl+B", "Toggle sidebar"],
+            ["⌘⌥P / Ctrl+Alt+P", "Start Pomodoro"],
+            ["Space", "Start / pause timer (while Pomodoro is open)"],
+          ].map(([k, v], idx) => (
             <Fragment key={idx}>
               <span style={{ fontFamily: "var(--mono)", color: "#888", background: "#1a1a1a", padding: "2px 8px", borderRadius: 4, fontSize: 11, textAlign: "center" }}>{k}</span>
               <span style={{ color: "#888" }}>{v}</span>
@@ -1135,7 +1314,81 @@ function SettingsView({ profile, onUpdate, onExport, onImport, onReset }) {
 // CSS
 // ══════════════════════════════════════════
 const CSS = `
-  :root { --mono: 'JetBrains Mono', monospace; --sans: 'DM Sans', sans-serif; --serif: 'Instrument Serif', serif; }
+  :root {
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+    --serif: 'Instrument Serif', serif;
+    --cl-content-max: 1100px;
+    --cl-pad-x: clamp(14px, 2.2vw, 48px);
+    --cl-pad-y: clamp(20px, 2.5vw, 52px);
+    --cl-title: clamp(1.35rem, 1.1vw + 1rem, 2.75rem);
+    --cl-stat-cols: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
+    --cl-mast-min: 175px;
+    --cl-lang-min: 155px;
+    --cl-two-col: 1fr 1fr;
+    --cl-cmd-max: 560px;
+    --cl-cmd-results-h: min(40vh, 340px);
+  }
+  @media (min-width: 480px) {
+    :root {
+      --cl-stat-cols: repeat(auto-fit, minmax(140px, 1fr));
+      --cl-mast-min: 185px;
+      --cl-lang-min: 162px;
+    }
+  }
+  @media (min-width: 640px) {
+    :root { --cl-content-max: 1120px; }
+  }
+  @media (min-width: 768px) {
+    :root { --cl-content-max: 1140px; }
+  }
+  @media (min-width: 1024px) {
+    :root {
+      --cl-content-max: 1240px;
+      --cl-mast-min: 198px;
+      --cl-lang-min: 172px;
+      --cl-cmd-max: 580px;
+    }
+  }
+  @media (min-width: 1280px) {
+    :root {
+      --cl-content-max: 1360px;
+      --cl-stat-cols: repeat(4, minmax(0, 1fr));
+      --cl-mast-min: 205px;
+      --cl-lang-min: 180px;
+      --cl-cmd-max: 620px;
+      --cl-cmd-results-h: min(44vh, 380px);
+    }
+  }
+  @media (min-width: 1536px) {
+    :root {
+      --cl-content-max: 1520px;
+      --cl-mast-min: 212px;
+      --cl-lang-min: 188px;
+      --cl-cmd-max: 660px;
+      --cl-cmd-results-h: min(48vh, 420px);
+    }
+  }
+  @media (min-width: 1920px) {
+    :root {
+      --cl-content-max: 1720px;
+      --cl-mast-min: 220px;
+      --cl-lang-min: 195px;
+      --cl-cmd-max: 700px;
+      --cl-pad-x: clamp(32px, 2.5vw, 64px);
+    }
+  }
+  @media (min-width: 2560px) {
+    :root {
+      --cl-content-max: 2040px;
+      --cl-mast-min: 228px;
+      --cl-lang-min: 200px;
+      --cl-cmd-max: 760px;
+      --cl-pad-x: clamp(40px, 3vw, 96px);
+      --cl-pad-y: clamp(28px, 2.8vw, 64px);
+      --cl-cmd-results-h: min(50vh, 480px);
+    }
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -1149,15 +1402,53 @@ const CSS = `
   @keyframes fadeIn { from{opacity:0} to{opacity:1} }
   .cl-loader { font-size: 48px; color: #3178c6; animation: pulse 1.8s infinite ease-in-out; }
   .cl-toast { animation: toastIn 0.25s ease; }
+  .cl-view {
+    width: 100%;
+    max-width: var(--cl-content-max);
+    margin-left: auto;
+    margin-right: auto;
+    padding: var(--cl-pad-y) var(--cl-pad-x);
+    box-sizing: border-box;
+  }
+  .cl-stats {
+    display: grid;
+    grid-template-columns: var(--cl-stat-cols);
+    gap: clamp(8px, 1vw, 16px);
+    margin-bottom: clamp(20px, 2vw, 32px);
+  }
+  .cl-mast-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--cl-mast-min), 1fr));
+    gap: clamp(8px, 0.9vw, 14px);
+  }
+  .cl-lang-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--cl-lang-min), 1fr));
+    gap: clamp(10px, 1vw, 18px);
+  }
+  .cl-two-col {
+    display: grid;
+    grid-template-columns: var(--cl-two-col);
+    gap: clamp(12px, 1.2vw, 24px);
+  }
+  .cl-overlay-cmd { padding-top: clamp(48px, 10vh, 120px); padding-left: var(--cl-pad-x); padding-right: var(--cl-pad-x); }
+  .cl-overlay-pomo { padding-top: clamp(64px, 10vh, 100px); padding-left: var(--cl-pad-x); padding-right: var(--cl-pad-x); }
+  .cl-cmd-modal { max-width: var(--cl-cmd-max); width: 100%; }
+  .cl-cmd-results { max-height: var(--cl-cmd-results-h); }
   .cl-stat-card:hover { border-color: #333 !important; }
   .cl-mast-card:hover { border-color: #333 !important; transform: translateY(-1px); }
   .cl-lang-card:hover { border-color: #333 !important; transform: translateY(-2px); }
   .cl-flashcard { cursor: pointer; transition: transform 0.2s; }
   .cl-flashcard:hover { transform: scale(1.01); }
   .cl-bar-fill { transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
-  @media (max-width: 768px) {
+  @media (max-width: 480px) {
+    .cl-stats { grid-template-columns: 1fr !important; }
+  }
+  @media (max-width: 900px) {
     .cl-two-col { grid-template-columns: 1fr !important; }
-    .cl-view { padding: 20px 14px !important; }
+  }
+  @media (max-width: 768px) {
+    .cl-view { padding: 18px 14px !important; }
     .cl-stats { grid-template-columns: repeat(2, 1fr) !important; }
     .cl-filter-row { flex-direction: column !important; }
     .cl-session-form { flex-direction: column !important; align-items: stretch !important; }
@@ -1177,13 +1468,13 @@ const S = {
   toast: { position: "fixed", top: 20, right: 20, zIndex: 9999, display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 8, border: "1px solid", fontSize: 13, fontWeight: 500, color: "#fff", backdropFilter: "blur(12px)" },
 
   // Overlay
-  overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 80, animation: "fadeIn 0.15s ease" },
+  overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", animation: "fadeIn 0.15s ease" },
 
   // Command palette
-  cmdModal: { width: "100%", maxWidth: 560, background: "#111", border: "1px solid #222", borderRadius: 12, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.6)", animation: "slideIn 0.15s ease" },
+  cmdModal: { background: "#111", border: "1px solid #222", borderRadius: 12, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.6)", animation: "slideIn 0.15s ease" },
   cmdInputWrap: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "1px solid #1a1a1a" },
   cmdInput: { flex: 1, background: "none", border: "none", color: "#ddd", fontSize: 15, outline: "none", fontFamily: "var(--sans)" },
-  cmdResults: { maxHeight: 340, overflowY: "auto" },
+  cmdResults: { overflowY: "auto" },
   cmdItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", width: "100%", background: "none", border: "none", cursor: "pointer", fontSize: 13, textAlign: "left" },
   cmdItemActive: { background: "#1a1a1a" },
 
@@ -1210,13 +1501,13 @@ const S = {
 
   // Main
   main: { flex: 1, overflow: "auto", background: "#080808" },
-  vc: { padding: "32px 40px", maxWidth: 1100, margin: "0 auto" },
+  vc: { width: "100%" },
   vh: { marginBottom: 28 },
-  vt: { fontSize: 26, fontWeight: 800, color: "#fff", letterSpacing: -0.5, fontFamily: "var(--sans)", lineHeight: 1.2 },
+  vt: { fontSize: "var(--cl-title)", fontWeight: 800, color: "#fff", letterSpacing: -0.5, fontFamily: "var(--sans)", lineHeight: 1.2 },
   vs: { color: "#555", fontSize: 13, marginTop: 4 },
 
   // Stats
-  statsRow: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 28 },
+  statsRow: {},
   statCard: { background: "#0d0d0d", borderRadius: 8, padding: "14px 14px", position: "relative", overflow: "hidden", border: "1px solid #161616", transition: "border-color 0.2s" },
   statAccent: { position: "absolute", top: 0, left: 0, right: 0, height: 2 },
   statValue: { fontSize: 22, fontWeight: 800, color: "#fff", fontFamily: "var(--mono)", marginTop: 2 },
@@ -1229,14 +1520,14 @@ const S = {
   linkBtn: { background: "none", border: "none", color: "#3178c6", cursor: "pointer", fontSize: 12, fontWeight: 600 },
 
   // Mastery grid
-  mastGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(195px, 1fr))", gap: 8 },
+  mastGrid: {},
   mastCard: { background: "#0a0a0a", borderRadius: 8, padding: "12px", border: "1px solid #161616", cursor: "pointer", textAlign: "left", transition: "all 0.2s", display: "flex", flexDirection: "column", gap: 6 },
   langDot: { width: 22, height: 22, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff" },
   mastBar: { height: 3, borderRadius: 2, background: "#1a1a1a", overflow: "hidden", marginBottom: 4 },
   mastFill: { height: "100%", borderRadius: 2, transition: "width 0.4s ease" },
 
   // Lang grid
-  langGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 12 },
+  langGrid: {},
   langCard: { background: "#0d0d0d", borderRadius: 10, padding: "22px 14px", border: "1px solid #161616", cursor: "pointer", textAlign: "center", transition: "all 0.2s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
   langIcon: { width: 44, height: 44, borderRadius: 10, border: "2px solid", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 },
   langDetailIcon: { width: 52, height: 52, borderRadius: 12, border: "2px solid", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 },
@@ -1263,5 +1554,5 @@ const S = {
   removeBtn: { background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1, transition: "color 0.15s" },
   tabBtn: { background: "none", border: "1px solid #1a1a1a", borderRadius: 6, padding: "7px 14px", color: "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" },
   tabActive: { background: "#161616", color: "#ddd", borderColor: "#222" },
-  twoCol: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
+  twoCol: {},
 };

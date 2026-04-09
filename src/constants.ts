@@ -17,6 +17,13 @@ export const LANGS: LangDef[] = [
   { id: "git", name: "Git", color: "#f05032", icon: "⑂" },
   { id: "pinescript", name: "Pine Script", color: "#536dfe", icon: "△" },
   { id: "shell", name: "Shell/Bash", color: "#4eaa25", icon: "▶" },
+  { id: "tailwind", name: "Tailwind CSS", color: "#38bdf8", icon: "〰" },
+  { id: "nodejs", name: "Node.js", color: "#3c873a", icon: "◐" },
+  { id: "vanilla", name: "Vanilla JS", color: "#f0db4f", icon: "✦" },
+  { id: "nextjs", name: "Next.js", color: "#e4e4e4", icon: "▲" },
+  { id: "gsap", name: "GSAP", color: "#88ce02", icon: "⚡" },
+  { id: "throttle", name: "Throttle.js", color: "#818cf8", icon: "⏱" },
+  { id: "threejs", name: "Three.js", color: "#049ef4", icon: "◊" },
 ];
 
 export const LANG_MAP: Record<string, LangDef> = Object.fromEntries(
@@ -52,3 +59,14 @@ export const defaultProgress = (): ProgressMap =>
     };
     return acc;
   }, {});
+
+/** Merge saved progress with current LANGS so new languages get default rows. */
+export const mergeProgressWithDefaults = (loaded: ProgressMap | null | undefined): ProgressMap => {
+  const base = defaultProgress();
+  if (!loaded) return base;
+  const merged: ProgressMap = { ...base };
+  for (const id of Object.keys(base)) {
+    merged[id] = { ...base[id], ...loaded[id] };
+  }
+  return merged;
+};

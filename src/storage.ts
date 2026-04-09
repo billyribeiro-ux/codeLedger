@@ -6,6 +6,10 @@ const DB_FILE = "sqlite:codeledger.db";
 let db: Database | null = null;
 let ready: Promise<void> | null = null;
 
+const DEBOUNCE_MS = 450;
+const pendingWrites = new Map<string, string>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
 /** Ensures SQLite table exists (Tauri) or no-op (browser). */
 export async function initStorage(): Promise<void> {
   if (!isTauri()) return;
@@ -22,7 +26,49 @@ export async function initStorage(): Promise<void> {
   await ready;
 }
 
+async function writeImmediate(key: string, json: string): Promise<void> {
+  await initStorage();
+  if (isTauri() && db) {
+    try {
+      await db.execute(
+        "INSERT OR REPLACE INTO kv (key, value) VALUES ($1, $2)",
+        [key, json]
+      );
+    } catch (e) {
+      console.error(e);
+    }
+    return;
+  }
+  try {
+    localStorage.setItem(key, json);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function scheduleFlush(): void {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushPendingSaves();
+  }, DEBOUNCE_MS);
+}
+
+/** Flush debounced writes immediately (e.g. before tab close). */
+export async function flushPendingSaves(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  const entries = [...pendingWrites.entries()];
+  pendingWrites.clear();
+  for (const [key, json] of entries) {
+    await writeImmediate(key, json);
+  }
+}
+
 export async function load<T>(key: string, fallback: T): Promise<T> {
+  await flushPendingSaves();
   await initStorage();
   if (isTauri() && db) {
     try {
@@ -45,22 +91,6 @@ export async function load<T>(key: string, fallback: T): Promise<T> {
 }
 
 export async function save(key: string, value: unknown): Promise<void> {
-  const json = JSON.stringify(value);
-  await initStorage();
-  if (isTauri() && db) {
-    try {
-      await db.execute(
-        "INSERT OR REPLACE INTO kv (key, value) VALUES ($1, $2)",
-        [key, json]
-      );
-    } catch (e) {
-      console.error(e);
-    }
-    return;
-  }
-  try {
-    localStorage.setItem(key, json);
-  } catch (e) {
-    console.error(e);
-  }
+  pendingWrites.set(key, JSON.stringify(value));
+  scheduleFlush();
 }
