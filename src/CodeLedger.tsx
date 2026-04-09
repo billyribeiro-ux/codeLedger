@@ -1,9 +1,20 @@
 // @ts-nocheck — migrated single-file UI; strict style-object typing deferred
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, type CSSProperties } from "react";
 import type { Goal, Note, Profile, ProgressMap, Session, ToastState } from "./types";
 import { backupSchema } from "./schema";
 import { flushPendingSaves, initStorage, load, save } from "./storage";
-import { LANGS, LANG_MAP, MASTERY, defaultProfile, defaultProgress, mergeProgressWithDefaults } from "./constants";
+import {
+  LANGS,
+  LANG_MAP,
+  MASTERY,
+  WORKSPACE_THEMES,
+  defaultProfile,
+  defaultProgress,
+  mergeProfileWithDefaults,
+  mergeProgressWithDefaults,
+  resolveWorkspaceTheme,
+  workspaceThemeVars,
+} from "./constants";
 import {
   uid,
   fmtDate,
@@ -77,7 +88,7 @@ export default function CodeLedger() {
         load("cl3-profile", defaultProfile()), load("cl3-progress", defaultProgress()),
         load<Note[]>("cl3-notes", []), load<Goal[]>("cl3-goals", []), load<Session[]>("cl3-sessions", []),
       ]);
-      setProfile(p);
+      setProfile(mergeProfileWithDefaults(p));
       setProgress(mergeProgressWithDefaults(pr));
       setNotes(n); setGoals(g); setSessions(s); setLoaded(true);
     })();
@@ -266,7 +277,7 @@ export default function CodeLedger() {
         return;
       }
       const d = parsed.data;
-      if (d.profile) setProfile(d.profile);
+      if (d.profile) setProfile(mergeProfileWithDefaults(d.profile as Partial<Profile>));
       if (d.progress) setProgress(mergeProgressWithDefaults(d.progress as ProgressMap));
       if (d.notes) setNotes(d.notes as Note[]);
       if (d.goals) setGoals(d.goals as Goal[]);
@@ -277,8 +288,14 @@ export default function CodeLedger() {
     }
   }, [showToast]);
 
+  const workspaceTheme = useMemo(
+    () => resolveWorkspaceTheme(profile.workspaceThemeId),
+    [profile.workspaceThemeId]
+  );
+  const shellVars = workspaceThemeVars(workspaceTheme) as CSSProperties;
+
   if (!loaded) return (
-    <div style={S.loadingScreen}>
+    <div style={{ ...S.loadingScreen, ...shellVars }}>
       <style>{CSS}</style>
       <div className="cl-loader">◇</div>
       <p style={{ color: "#666", marginTop: 20, fontFamily: "var(--mono)", fontSize: 12, letterSpacing: 2, textTransform: "uppercase" }}>CodeLedger</p>
@@ -286,7 +303,7 @@ export default function CodeLedger() {
   );
 
   return (
-    <div style={S.app}>
+    <div className="cl-app" style={{ ...S.app, ...shellVars }}>
       <style>{CSS}</style>
       {/* ── Toast ── */}
       {toast && (
@@ -325,7 +342,7 @@ export default function CodeLedger() {
                 <div style={{ display: "flex", gap: 8 }}>
                   {[15, 25, 45, 60].map((m) => (
                     <button key={m} onClick={() => { setPomoDuration(m); setPomoSeconds(m * 60); }}
-                      style={{ ...S.btn, flex: 1, background: pomoDuration === m ? "#059669" : "#1a1a1a", border: "1px solid #333", padding: "8px" }}>
+                      style={{ ...S.btn, flex: 1, background: pomoDuration === m ? "#059669" : "var(--cl-theme-border-soft)", border: "1px solid #333", padding: "8px" }}>
                       {m}m
                     </button>
                   ))}
@@ -361,11 +378,14 @@ export default function CodeLedger() {
       )}
 
       {/* ── Sidebar ── */}
-      <aside className="cl-sidebar" style={{ ...S.sidebar, ...(sideOpen ? {} : S.sidebarCollapsed) }}>
+      <aside
+        className={`cl-sidebar ${sideOpen ? "cl-sidebar--expanded" : "cl-sidebar--collapsed"}`}
+        style={S.sidebar}
+      >
         <div style={S.sidebarHeader}>
           <div style={S.logo}>
-            <span style={S.logoIcon}>◇</span>
-            {sideOpen && <span style={S.logoText}>CodeLedger</span>}
+            <span className="cl-logo-icon" style={S.logoIcon}>◇</span>
+            {sideOpen && <span className="cl-logo-text" style={S.logoText}>CodeLedger</span>}
           </div>
           <button style={S.collapseBtn} onClick={() => setSideOpen(!sideOpen)}>{sideOpen ? "◂" : "▸"}</button>
         </div>
@@ -374,11 +394,12 @@ export default function CodeLedger() {
             <button
               key={item.id}
               type="button"
+              className="cl-nav-item"
               title={`${item.label} (Alt+${item.key})`}
               style={{ ...S.navItem, ...(view === item.id ? S.navActive : {}) }}
               onClick={() => { setView(item.id); setSelLang(null); }}
             >
-              <span style={S.navIcon}>{item.icon}</span>
+              <span className="cl-nav-icon" style={S.navIcon}>{item.icon}</span>
               {sideOpen && <span style={{ flex: 1 }}>{item.label}</span>}
               {sideOpen && <span style={S.navKey}>{item.key}</span>}
             </button>
@@ -392,7 +413,7 @@ export default function CodeLedger() {
             <div style={S.streak}>
               <span>🔥</span> {profile.streakDays} day streak
             </div>
-            <div style={{ fontSize: 9, color: "#444", marginTop: 6, fontFamily: "var(--mono)", lineHeight: 1.45 }}>
+            <div className="cl-sidebar-footer-hint" style={{ fontSize: 9, color: "#444", marginTop: 6, fontFamily: "var(--mono)", lineHeight: 1.45 }}>
               ⌘K palette · / search · Alt+1–8 · [ ] views · ⌘, settings · ⌘⌥P timer · Space pause
             </div>
           </div>
@@ -573,7 +594,7 @@ function Dashboard({ profile, progress, notes, goals, sessions, onNav, onStartPo
           <div key={i} className="cl-stat-card" style={S.statCard}>
             <div style={{ ...S.statAccent, background: s.accent }} />
             <div style={S.statLabel}>{s.label}</div>
-            <div style={S.statValue}>{s.value}</div>
+            <div className="cl-stat-value">{s.value}</div>
             <div style={{ fontSize: 10, color: "#555", marginTop: 4 }}>{s.sub}</div>
           </div>
         ))}
@@ -653,7 +674,7 @@ function Dashboard({ profile, progress, notes, goals, sessions, onNav, onStartPo
               return (
                 <div key={id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <span style={{ width: 90, fontSize: 12, color: l.color, fontWeight: 600, textAlign: "right" }}>{l.name}</span>
-                  <div style={{ flex: 1, height: 20, background: "#1a1a1a", borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ flex: 1, height: 20, background: "var(--cl-theme-border-soft)", borderRadius: 4, overflow: "hidden" }}>
                     <div className="cl-bar-fill" style={{ height: "100%", width: `${pct}%`, background: l.color, borderRadius: 4, transition: "width 0.6s ease" }} />
                   </div>
                   <span style={{ width: 50, fontSize: 11, color: "#888", fontFamily: "var(--mono)", textAlign: "right" }}>{Math.floor(d.studyMinutes / 60)}h {d.studyMinutes % 60}m</span>
@@ -1007,7 +1028,7 @@ function SessionsView({ sessions, onLog, onStartPomo }) {
       <section style={S.sec}>
         <h2 style={S.secT}>Last 90 Days</h2>
         <div style={{ display: "inline-grid", gridTemplateRows: "repeat(7, 12px)", gridTemplateColumns: `repeat(${weeks}, 12px)`, gridAutoFlow: "column", gap: 3, overflowX: "auto" }}>
-          {hm.map((d, i) => d ? <div key={i} title={`${d.date}: ${d.mins}m`} style={{ width: 10, height: 10, borderRadius: 2, background: d.mins === 0 ? "#161616" : `rgba(5, 150, 105, ${Math.max(0.25, d.mins / maxM)})` }} /> : <div key={i} style={{ width: 10, height: 10 }} />)}
+          {hm.map((d, i) => d ? <div key={i} title={`${d.date}: ${d.mins}m`} style={{ width: 10, height: 10, borderRadius: 2, background: d.mins === 0 ? "var(--cl-theme-border)" : `rgba(5, 150, 105, ${Math.max(0.25, d.mins / maxM)})` }} /> : <div key={i} style={{ width: 10, height: 10 }} />)}
         </div>
       </section>
 
@@ -1015,7 +1036,7 @@ function SessionsView({ sessions, onLog, onStartPomo }) {
         <h2 style={S.secT}>History</h2>
         {sessions.length === 0 && <p style={S.empty}>No sessions yet.</p>}
         {sessions.slice(0, 40).map((s) => { const l = LANG_MAP[s.langId]; return (
-          <div key={s.id} className="cl-session-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", borderBottom: "1px solid #1a1a1a", flexWrap: "wrap", gap: 8 }}>
+          <div key={s.id} className="cl-session-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", borderBottom: "1px solid var(--cl-theme-border-soft)", flexWrap: "wrap", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
               {l && <span style={{ color: l.color, fontWeight: 700, fontSize: 11, flexShrink: 0 }}>{l.name}</span>}
               <span style={{ color: "#bbb", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.description || "Study session"}</span>
@@ -1112,7 +1133,7 @@ function ReviewView({ notes, progress, onMark }) {
         <p style={{ color: "#666", fontSize: 12, marginBottom: 10 }}>Not studied in 7+ days</p>
         {stale.length === 0 ? <p style={S.empty}>Nothing stale. Consistent across the board.</p> : stale.map(([id, d]) => {
           const l = LANG_MAP[id];
-          return <div key={id} style={{ display: "flex", justifyContent: "space-between", padding: "10px", background: "#0d0d0d", borderRadius: 6, marginBottom: 4, border: "1px solid #1a1a1a" }}>
+          return <div key={id} style={{ display: "flex", justifyContent: "space-between", padding: "10px", background: "var(--cl-theme-panel)", borderRadius: 6, marginBottom: 4, border: "1px solid var(--cl-theme-border-soft)" }}>
             <span style={{ color: l.color, fontWeight: 700 }}>{l.icon} {l.name}</span>
             <span style={{ color: "#dc2626", fontSize: 12 }}>{daysSince(d.lastStudied)}d idle</span>
           </div>;
@@ -1184,7 +1205,7 @@ function AnalyticsView({ sessions, progress, notes, goals, profile }) {
           <div key={i} className="cl-stat-card" style={S.statCard}>
             <div style={{ ...S.statAccent, background: s.accent }} />
             <div style={S.statLabel}>{s.label}</div>
-            <div style={S.statValue}>{s.value}</div>
+            <div className="cl-stat-value">{s.value}</div>
           </div>
         ))}
       </div>
@@ -1196,7 +1217,7 @@ function AnalyticsView({ sessions, progress, notes, goals, profile }) {
           {weeklyData.map((w, i) => (
             <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
               <span style={{ fontSize: 10, color: "#666", fontFamily: "var(--mono)" }}>{w.mins > 0 ? `${Math.floor(w.mins / 60)}h` : ""}</span>
-              <div style={{ width: "100%", maxWidth: 40, borderRadius: 4, background: w.mins > 0 ? `rgba(49, 120, 198, ${Math.max(0.3, w.mins / maxWeekMins)})` : "#161616", height: `${Math.max(4, (w.mins / maxWeekMins) * 100)}%`, transition: "height 0.4s ease" }} />
+              <div style={{ width: "100%", maxWidth: 40, borderRadius: 4, background: w.mins > 0 ? `rgba(49, 120, 198, ${Math.max(0.3, w.mins / maxWeekMins)})` : "var(--cl-theme-border)", height: `${Math.max(4, (w.mins / maxWeekMins) * 100)}%`, transition: "height 0.4s ease" }} />
               <span style={{ fontSize: 9, color: "#444" }}>{w.label}</span>
             </div>
           ))}
@@ -1270,6 +1291,39 @@ function SettingsView({ profile, onUpdate, onExport, onImport, onReset }) {
       </section>
 
       <section style={S.sec}>
+        <h2 style={S.secT}>Appearance</h2>
+        <p style={{ color: "#666", fontSize: 12, marginBottom: 12 }}>
+          Workspace background palette — applies to the shell, sidebar, and card tones.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+          {WORKSPACE_THEMES.map((t) => {
+            const active = profile.workspaceThemeId === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                title={t.label}
+                onClick={() => onUpdate({ workspaceThemeId: t.id })}
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  padding: 0,
+                  border: active ? "2px solid #3178c6" : "2px solid transparent",
+                  boxShadow: active ? "0 0 0 1px rgba(49, 120, 198, 0.35)" : "inset 0 0 0 1px rgba(255,255,255,0.06)",
+                  background: `linear-gradient(145deg, ${t.app} 0%, ${t.sidebar} 45%, ${t.panel} 100%)`,
+                }}
+              />
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
+          Selected: <span style={{ color: "#aaa", fontFamily: "var(--mono)" }}>{resolveWorkspaceTheme(profile.workspaceThemeId).label}</span>
+        </div>
+      </section>
+
+      <section style={S.sec}>
         <h2 style={S.secT}>Data Management</h2>
         <p style={{ color: "#666", fontSize: 12, marginBottom: 12 }}>Export your data as JSON for backup, or import a previous backup.</p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1285,7 +1339,7 @@ function SettingsView({ profile, onUpdate, onExport, onImport, onReset }) {
         <button style={{ ...S.btn, background: "#dc2626" }} onClick={onReset}>Reset All Data</button>
       </section>
 
-      <section style={{ ...S.sec, borderColor: "#1a1a1a", background: "#0d0d0d" }}>
+      <section style={{ ...S.sec, borderColor: "var(--cl-theme-border-soft)", background: "var(--cl-theme-panel)" }}>
         <h2 style={S.secT}>Keyboard Shortcuts</h2>
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 16px", fontSize: 13 }}>
           {[
@@ -1300,7 +1354,7 @@ function SettingsView({ profile, onUpdate, onExport, onImport, onReset }) {
             ["Space", "Start / pause timer (while Pomodoro is open)"],
           ].map(([k, v], idx) => (
             <Fragment key={idx}>
-              <span style={{ fontFamily: "var(--mono)", color: "#888", background: "#1a1a1a", padding: "2px 8px", borderRadius: 4, fontSize: 11, textAlign: "center" }}>{k}</span>
+              <span style={{ fontFamily: "var(--mono)", color: "#888", background: "var(--cl-theme-border-soft)", padding: "2px 8px", borderRadius: 4, fontSize: 11, textAlign: "center" }}>{k}</span>
               <span style={{ color: "#888" }}>{v}</span>
             </Fragment>
           ))}
@@ -1318,10 +1372,21 @@ const CSS = `
     --mono: 'JetBrains Mono', monospace;
     --sans: 'DM Sans', sans-serif;
     --serif: 'Instrument Serif', serif;
+    --cl-theme-app: #080808;
+    --cl-theme-main: #080808;
+    --cl-theme-sidebar: #0b0b0b;
+    --cl-theme-sidebar-border: #151515;
+    --cl-theme-panel: #0d0d0d;
+    --cl-theme-panel-deep: #0a0a0a;
+    --cl-theme-border: #161616;
+    --cl-theme-border-soft: #1a1a1a;
+    --cl-theme-nav-active: #141414;
+    --cl-theme-input-bg: #0a0a0a;
+    --cl-theme-elevated: #111111;
     --cl-content-max: 1100px;
     --cl-pad-x: clamp(14px, 2.2vw, 48px);
     --cl-pad-y: clamp(20px, 2.5vw, 52px);
-    --cl-title: clamp(1.35rem, 1.1vw + 1rem, 2.75rem);
+    --cl-title: clamp(1.35rem, 1.1vw + 1rem, 2.85rem);
     --cl-stat-cols: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
     --cl-mast-min: 175px;
     --cl-lang-min: 155px;
@@ -1350,10 +1415,14 @@ const CSS = `
       --cl-cmd-max: 580px;
     }
   }
+  @media (min-width: 1200px) {
+    :root {
+      --cl-stat-cols: repeat(5, minmax(0, 1fr));
+    }
+  }
   @media (min-width: 1280px) {
     :root {
       --cl-content-max: 1360px;
-      --cl-stat-cols: repeat(4, minmax(0, 1fr));
       --cl-mast-min: 205px;
       --cl-lang-min: 180px;
       --cl-cmd-max: 620px;
@@ -1371,29 +1440,95 @@ const CSS = `
   }
   @media (min-width: 1920px) {
     :root {
-      --cl-content-max: 1720px;
-      --cl-mast-min: 220px;
-      --cl-lang-min: 195px;
+      --cl-content-max: 1820px;
+      --cl-mast-min: 224px;
+      --cl-lang-min: 198px;
       --cl-cmd-max: 700px;
       --cl-pad-x: clamp(32px, 2.5vw, 64px);
     }
   }
   @media (min-width: 2560px) {
     :root {
-      --cl-content-max: 2040px;
-      --cl-mast-min: 228px;
-      --cl-lang-min: 200px;
-      --cl-cmd-max: 760px;
+      --cl-content-max: 2320px;
+      --cl-mast-min: 236px;
+      --cl-lang-min: 206px;
+      --cl-cmd-max: 780px;
       --cl-pad-x: clamp(40px, 3vw, 96px);
       --cl-pad-y: clamp(28px, 2.8vw, 64px);
       --cl-cmd-results-h: min(50vh, 480px);
     }
   }
+  @media (min-width: 3440px) {
+    :root {
+      --cl-content-max: 2560px;
+      --cl-mast-min: 242px;
+      --cl-lang-min: 212px;
+      --cl-cmd-max: 820px;
+    }
+  }
+  @media (min-width: 3840px) {
+    :root {
+      --cl-content-max: 2840px;
+      --cl-mast-min: 248px;
+      --cl-lang-min: 216px;
+      --cl-title: clamp(1.5rem, 0.9vw + 1.25rem, 3rem);
+    }
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  .cl-app { min-height: 100vh; }
+  .cl-sidebar { transition: width 0.22s ease; flex-shrink: 0; overflow: hidden; }
+  .cl-sidebar--expanded {
+    width: clamp(226px, 11.5vw, 304px);
+  }
+  .cl-sidebar--collapsed {
+    width: 52px;
+    min-width: 52px;
+  }
+  @media (min-width: 1920px) {
+    .cl-sidebar--expanded {
+      width: clamp(246px, 10.5vw, 322px);
+    }
+    .cl-sidebar--expanded .cl-nav-item {
+      font-size: 14px;
+      padding: 10px 14px;
+      gap: 12px;
+    }
+    .cl-sidebar--expanded .cl-nav-icon {
+      font-size: 16px;
+      width: 22px;
+    }
+    .cl-sidebar--expanded .cl-logo-text {
+      font-size: 15px;
+    }
+    .cl-sidebar--expanded .cl-logo-icon {
+      font-size: 24px;
+    }
+    .cl-sidebar--expanded .cl-sidebar-footer-hint {
+      font-size: 10px !important;
+    }
+  }
+  @media (min-width: 2560px) {
+    .cl-sidebar--expanded {
+      width: clamp(268px, 9.5vw, 348px);
+    }
+    .cl-sidebar--expanded .cl-nav-item {
+      font-size: 14.5px;
+      padding: 11px 16px;
+    }
+    .cl-sidebar--expanded .cl-nav-icon {
+      font-size: 17px;
+      width: 24px;
+    }
+  }
+  @media (min-width: 3440px) {
+    .cl-sidebar--expanded {
+      width: clamp(288px, 8.5vw, 372px);
+    }
+  }
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #333; }
+  ::-webkit-scrollbar-thumb { background: var(--cl-theme-border-soft); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
   ::selection { background: #3178c630; }
   textarea, input, select, button { font-family: var(--sans); }
   @keyframes pulse { 0%,100%{opacity:.3;transform:scale(0.95)} 50%{opacity:1;transform:scale(1.05)} }
@@ -1435,7 +1570,14 @@ const CSS = `
   .cl-overlay-pomo { padding-top: clamp(64px, 10vh, 100px); padding-left: var(--cl-pad-x); padding-right: var(--cl-pad-x); }
   .cl-cmd-modal { max-width: var(--cl-cmd-max); width: 100%; }
   .cl-cmd-results { max-height: var(--cl-cmd-results-h); }
-  .cl-stat-card:hover { border-color: #333 !important; }
+  .cl-stat-value {
+    font-size: clamp(1.15rem, 0.9vw + 0.65rem, 1.85rem);
+    font-weight: 800;
+    color: #fff;
+    font-family: var(--mono);
+    margin-top: 2px;
+  }
+  .cl-stat-card:hover { border-color: #444 !important; }
   .cl-mast-card:hover { border-color: #333 !important; transform: translateY(-1px); }
   .cl-lang-card:hover { border-color: #333 !important; transform: translateY(-2px); }
   .cl-flashcard { cursor: pointer; transition: transform 0.2s; }
@@ -1461,8 +1603,8 @@ const CSS = `
 // STYLES
 // ══════════════════════════════════════════
 const S = {
-  app: { display: "flex", height: "100vh", background: "#080808", color: "#e0e0e0", fontFamily: "var(--sans)", fontSize: 14, overflow: "hidden" },
-  loadingScreen: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", width: "100%", background: "#080808" },
+  app: { display: "flex", height: "100vh", background: "var(--cl-theme-app)", color: "#e0e0e0", fontFamily: "var(--sans)", fontSize: 14, overflow: "hidden" },
+  loadingScreen: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", width: "100%", background: "var(--cl-theme-app)" },
 
   // Toast
   toast: { position: "fixed", top: 20, right: 20, zIndex: 9999, display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 8, border: "1px solid", fontSize: 13, fontWeight: 500, color: "#fff", backdropFilter: "blur(12px)" },
@@ -1471,36 +1613,35 @@ const S = {
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", animation: "fadeIn 0.15s ease" },
 
   // Command palette
-  cmdModal: { background: "#111", border: "1px solid #222", borderRadius: 12, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.6)", animation: "slideIn 0.15s ease" },
-  cmdInputWrap: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "1px solid #1a1a1a" },
+  cmdModal: { background: "var(--cl-theme-elevated)", border: "1px solid var(--cl-theme-border-soft)", borderRadius: 12, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.6)", animation: "slideIn 0.15s ease" },
+  cmdInputWrap: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "1px solid var(--cl-theme-border-soft)" },
   cmdInput: { flex: 1, background: "none", border: "none", color: "#ddd", fontSize: 15, outline: "none", fontFamily: "var(--sans)" },
   cmdResults: { overflowY: "auto" },
   cmdItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", width: "100%", background: "none", border: "none", cursor: "pointer", fontSize: 13, textAlign: "left" },
-  cmdItemActive: { background: "#1a1a1a" },
+  cmdItemActive: { background: "var(--cl-theme-border-soft)" },
 
   // Pomodoro
-  pomoModal: { background: "#111", border: "1px solid #222", borderRadius: 16, padding: "40px 32px", display: "flex", flexDirection: "column", alignItems: "center", width: "100%", maxWidth: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.6)", animation: "slideIn 0.2s ease" },
+  pomoModal: { background: "var(--cl-theme-elevated)", border: "1px solid var(--cl-theme-border-soft)", borderRadius: 16, padding: "40px 32px", display: "flex", flexDirection: "column", alignItems: "center", width: "100%", maxWidth: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.6)", animation: "slideIn 0.2s ease" },
   pomoTime: { fontSize: 72, fontWeight: 300, color: "#fff", fontFamily: "var(--mono)", letterSpacing: -2, margin: "20px 0", lineHeight: 1 },
 
   // Sidebar
-  sidebar: { width: 220, background: "#0b0b0b", borderRight: "1px solid #151515", display: "flex", flexDirection: "column", transition: "width 0.2s", flexShrink: 0, overflow: "hidden" },
-  sidebarCollapsed: { width: 52 },
-  sidebarHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 12px", borderBottom: "1px solid #151515" },
+  sidebar: { background: "var(--cl-theme-sidebar)", borderRight: "1px solid var(--cl-theme-sidebar-border)", display: "flex", flexDirection: "column", flexShrink: 0 },
+  sidebarHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 12px", borderBottom: "1px solid var(--cl-theme-sidebar-border)" },
   logo: { display: "flex", alignItems: "center", gap: 8 },
   logoIcon: { fontSize: 22, color: "#3178c6", fontWeight: 700 },
   logoText: { fontSize: 14, fontWeight: 700, color: "#fff", fontFamily: "var(--mono)", letterSpacing: -0.5 },
   collapseBtn: { background: "none", border: "none", color: "#444", cursor: "pointer", fontSize: 14, padding: "4px 6px" },
   nav: { flex: 1, display: "flex", flexDirection: "column", padding: "8px 6px", gap: 1 },
   navItem: { display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 6, background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 13, fontWeight: 500, textAlign: "left", transition: "all 0.15s", whiteSpace: "nowrap" },
-  navActive: { background: "#141414", color: "#ddd" },
+  navActive: { background: "var(--cl-theme-nav-active)", color: "#ddd" },
   navIcon: { fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 },
   navKey: { fontSize: 10, color: "#333", fontFamily: "var(--mono)" },
-  sidebarFooter: { padding: "12px", borderTop: "1px solid #151515", display: "flex", flexDirection: "column", gap: 8 },
+  sidebarFooter: { padding: "12px", borderTop: "1px solid var(--cl-theme-sidebar-border)", display: "flex", flexDirection: "column", gap: 8 },
   pomoBtn: { display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "linear-gradient(135deg, #064e3b, #065f46)", border: "none", color: "#6ee7b7", cursor: "pointer", fontSize: 12, fontWeight: 600 },
   streak: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#666", fontFamily: "var(--mono)" },
 
   // Main
-  main: { flex: 1, overflow: "auto", background: "#080808" },
+  main: { flex: 1, overflow: "auto", background: "var(--cl-theme-main)", minWidth: 0 },
   vc: { width: "100%" },
   vh: { marginBottom: 28 },
   vt: { fontSize: "var(--cl-title)", fontWeight: 800, color: "#fff", letterSpacing: -0.5, fontFamily: "var(--sans)", lineHeight: 1.2 },
@@ -1508,51 +1649,50 @@ const S = {
 
   // Stats
   statsRow: {},
-  statCard: { background: "#0d0d0d", borderRadius: 8, padding: "14px 14px", position: "relative", overflow: "hidden", border: "1px solid #161616", transition: "border-color 0.2s" },
+  statCard: { background: "var(--cl-theme-panel)", borderRadius: 8, padding: "14px 14px", position: "relative", overflow: "hidden", border: "1px solid var(--cl-theme-border)", transition: "border-color 0.2s" },
   statAccent: { position: "absolute", top: 0, left: 0, right: 0, height: 2 },
-  statValue: { fontSize: 22, fontWeight: 800, color: "#fff", fontFamily: "var(--mono)", marginTop: 2 },
   statLabel: { fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: 0.8 },
 
   // Section
-  sec: { marginBottom: 24, background: "#0d0d0d", borderRadius: 10, padding: "20px", border: "1px solid #161616" },
+  sec: { marginBottom: 24, background: "var(--cl-theme-panel)", borderRadius: 10, padding: "20px", border: "1px solid var(--cl-theme-border)" },
   secT: { fontSize: 14, fontWeight: 700, color: "#aaa", marginBottom: 14, fontFamily: "var(--mono)", letterSpacing: -0.3 },
   empty: { color: "#444", fontSize: 13, fontStyle: "italic", padding: "10px 0" },
   linkBtn: { background: "none", border: "none", color: "#3178c6", cursor: "pointer", fontSize: 12, fontWeight: 600 },
 
   // Mastery grid
   mastGrid: {},
-  mastCard: { background: "#0a0a0a", borderRadius: 8, padding: "12px", border: "1px solid #161616", cursor: "pointer", textAlign: "left", transition: "all 0.2s", display: "flex", flexDirection: "column", gap: 6 },
+  mastCard: { background: "var(--cl-theme-panel-deep)", borderRadius: 8, padding: "12px", border: "1px solid var(--cl-theme-border)", cursor: "pointer", textAlign: "left", transition: "all 0.2s", display: "flex", flexDirection: "column", gap: 6 },
   langDot: { width: 22, height: 22, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff" },
-  mastBar: { height: 3, borderRadius: 2, background: "#1a1a1a", overflow: "hidden", marginBottom: 4 },
+  mastBar: { height: 3, borderRadius: 2, background: "var(--cl-theme-border-soft)", overflow: "hidden", marginBottom: 4 },
   mastFill: { height: "100%", borderRadius: 2, transition: "width 0.4s ease" },
 
   // Lang grid
   langGrid: {},
-  langCard: { background: "#0d0d0d", borderRadius: 10, padding: "22px 14px", border: "1px solid #161616", cursor: "pointer", textAlign: "center", transition: "all 0.2s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
+  langCard: { background: "var(--cl-theme-panel)", borderRadius: 10, padding: "22px 14px", border: "1px solid var(--cl-theme-border)", cursor: "pointer", textAlign: "center", transition: "all 0.2s", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
   langIcon: { width: 44, height: 44, borderRadius: 10, border: "2px solid", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 },
   langDetailIcon: { width: 52, height: 52, borderRadius: 12, border: "2px solid", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 },
 
   // Notes
-  noteCard: { background: "#0a0a0a", borderRadius: 8, border: "1px solid #161616", padding: "12px", marginBottom: 6 },
+  noteCard: { background: "var(--cl-theme-panel-deep)", borderRadius: 8, border: "1px solid var(--cl-theme-border)", padding: "12px", marginBottom: 6 },
   noteHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" },
-  noteContent: { whiteSpace: "pre-wrap", fontSize: 12, color: "#888", fontFamily: "var(--mono)", marginTop: 10, lineHeight: 1.6, background: "#080808", padding: 12, borderRadius: 6, overflow: "auto", maxHeight: 280 },
+  noteContent: { whiteSpace: "pre-wrap", fontSize: 12, color: "#888", fontFamily: "var(--mono)", marginTop: 10, lineHeight: 1.6, background: "var(--cl-theme-main)", padding: 12, borderRadius: 6, overflow: "auto", maxHeight: 280 },
   tag: { fontSize: 10, padding: "2px 8px", borderRadius: 10, border: "1px solid", fontWeight: 600 },
-  miniCard: { padding: "8px 0", borderBottom: "1px solid #141414" },
+  miniCard: { padding: "8px 0", borderBottom: "1px solid var(--cl-theme-border)" },
 
   // Goals
-  goalCard: { background: "#0a0a0a", borderRadius: 8, border: "1px solid #161616", padding: "14px", marginBottom: 6 },
+  goalCard: { background: "var(--cl-theme-panel-deep)", borderRadius: 8, border: "1px solid var(--cl-theme-border)", padding: "14px", marginBottom: 6 },
 
   // Flashcard
-  flashcard: { background: "linear-gradient(135deg, #111, #0d0d0d)", border: "1px solid #222", borderRadius: 16, padding: "40px 32px", minHeight: 200, display: "flex", alignItems: "center", justifyContent: "center" },
+  flashcard: { background: "linear-gradient(135deg, var(--cl-theme-elevated), var(--cl-theme-panel))", border: "1px solid var(--cl-theme-border-soft)", borderRadius: 16, padding: "40px 32px", minHeight: 200, display: "flex", alignItems: "center", justifyContent: "center" },
 
   // Form elements
-  input: { background: "#0a0a0a", border: "1px solid #1a1a1a", borderRadius: 6, padding: "10px 12px", color: "#ddd", fontSize: 13, outline: "none", fontFamily: "var(--sans)", transition: "border-color 0.15s" },
+  input: { background: "var(--cl-theme-input-bg)", border: "1px solid var(--cl-theme-border-soft)", borderRadius: 6, padding: "10px 12px", color: "#ddd", fontSize: 13, outline: "none", fontFamily: "var(--sans)", transition: "border-color 0.15s" },
   btn: { padding: "10px 18px", borderRadius: 6, border: "none", color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap", transition: "opacity 0.15s" },
   label: { fontSize: 11, color: "#666", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 },
   backBtn: { background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 13, fontWeight: 500, padding: 0 },
   chk: { width: 20, height: 20, borderRadius: 4, border: "2px solid #333", background: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, transition: "all 0.15s" },
   removeBtn: { background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1, transition: "color 0.15s" },
-  tabBtn: { background: "none", border: "1px solid #1a1a1a", borderRadius: 6, padding: "7px 14px", color: "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" },
-  tabActive: { background: "#161616", color: "#ddd", borderColor: "#222" },
+  tabBtn: { background: "none", border: "1px solid var(--cl-theme-border-soft)", borderRadius: 6, padding: "7px 14px", color: "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" },
+  tabActive: { background: "var(--cl-theme-nav-active)", color: "#ddd", borderColor: "var(--cl-theme-border-soft)" },
   twoCol: {},
 };

@@ -20,6 +20,8 @@ export interface Profile {
   totalStudyMinutes: number;
   streakDays: number;
   lastStudyDate: string | null;
+  /** Preset id from WORKSPACE_THEMES (workspace chrome / background). */
+  workspaceThemeId: string;
 }
 
 export interface Note {

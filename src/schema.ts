@@ -11,6 +11,7 @@ export const backupSchema = z.object({
       totalStudyMinutes: z.number(),
       streakDays: z.number(),
       lastStudyDate: z.string().nullable(),
+      workspaceThemeId: z.string().optional(),
     })
     .optional(),
   progress: z.record(z.string(), z.unknown()).optional(),
